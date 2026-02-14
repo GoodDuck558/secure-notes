@@ -9,8 +9,12 @@ from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.primitives import hashes
 
 VAULT_FILE = "vault.enc"
+NOTES_DIR = "notes"
 DEFAULT_ITERATIONS = 200_000
 SALT_SIZE = 16
+
+# Ensure notes directory exists
+os.makedirs(NOTES_DIR, exist_ok=True)
 
 
 # -------------------- UTIL --------------------
@@ -19,6 +23,10 @@ def validate_note_name(name: str):
     if not name or len(name) > 50 or not re.fullmatch(r"[a-zA-Z0-9_-]+", name):
         raise ValueError("Invalid note name.")
     return name
+
+
+def note_path(name: str) -> str:
+    return os.path.join(NOTES_DIR, f"{name}.enc")
 
 
 def stream_sha256(path: str) -> str:
@@ -57,10 +65,13 @@ def load_index(password: str):
     if not os.path.exists(VAULT_FILE):
         return {}, None, None
 
-    raw = json.loads(open(VAULT_FILE, "rb").read())
+    with open(VAULT_FILE, "rb") as f:
+        raw = json.loads(f.read())
+
     salt = base64.urlsafe_b64decode(raw["salt"])
     iterations = raw["iterations"]
     key = derive_key(password, salt, "index", iterations)
+
     plaintext = decrypt(base64.urlsafe_b64decode(raw["ciphertext"]), key)
     return json.loads(plaintext), salt, iterations
 
@@ -68,6 +79,7 @@ def load_index(password: str):
 def save_index(index: dict, password: str, salt=None, iterations=None):
     salt = salt or os.urandom(SALT_SIZE)
     iterations = iterations or DEFAULT_ITERATIONS
+
     key = derive_key(password, salt, "index", iterations)
     ciphertext = encrypt(json.dumps(index, separators=(",", ":")), key)
 
@@ -87,6 +99,7 @@ def save_index(index: dict, password: str, salt=None, iterations=None):
 def encrypt_note(name: str, content: str, password: str) -> bytes:
     salt = os.urandom(SALT_SIZE)
     key = derive_key(password, salt, "note", DEFAULT_ITERATIONS)
+
     payload = f"{name}\n{content}"
     encrypted = encrypt(payload, key)
 
@@ -99,9 +112,18 @@ def encrypt_note(name: str, content: str, password: str) -> bytes:
 
 
 def decrypt_note(name: str, password: str) -> str:
-    raw = json.loads(open(f"{name}.enc", "rb").read())
+    path = note_path(name)
+
+    if not os.path.exists(path):
+        raise FileNotFoundError("Note file missing.")
+
+    with open(path, "rb") as f:
+        raw = json.loads(f.read())
+
     salt = base64.urlsafe_b64decode(raw["salt"])
-    key = derive_key(password, salt, "note", raw["iterations"])
+    iterations = raw["iterations"]
+    key = derive_key(password, salt, "note", iterations)
+
     plaintext = decrypt(base64.urlsafe_b64decode(raw["ciphertext"]), key)
 
     if not plaintext.startswith(name + "\n"):
@@ -117,16 +139,19 @@ def create_note(password):
     content = input("Note content:\n")
 
     index, salt, iters = load_index(password)
+
     if name in index:
         if input("Overwrite? (y/N): ").lower() != "y":
             return
 
     data = encrypt_note(name, content, password)
-    with open(f"{name}.enc", "wb") as f:
+
+    with open(note_path(name), "wb") as f:
         f.write(data)
 
-    index[name] = stream_sha256(f"{name}.enc")
+    index[name] = stream_sha256(note_path(name))
     save_index(index, password, salt, iters)
+
     print("Saved.")
 
 
@@ -138,7 +163,7 @@ def read_note(password):
         print("Not found.")
         return
 
-    if stream_sha256(f"{name}.enc") != index[name]:
+    if stream_sha256(note_path(name)) != index[name]:
         print("Integrity check failed.")
         return
 
@@ -156,8 +181,9 @@ def delete_note(password):
     if input("Delete permanently? (y/N): ").lower() != "y":
         return
 
-    os.remove(f"{name}.enc")
+    os.remove(note_path(name))
     del index[name]
+
     save_index(index, password, salt, iters)
     print("Deleted.")
 
@@ -167,24 +193,28 @@ def rename_note(password):
     new = validate_note_name(input("New name: ").strip())
 
     index, salt, iters = load_index(password)
+
     if old not in index or new in index:
         print("Invalid rename.")
         return
 
     content = decrypt_note(old, password)
-    os.remove(f"{old}.enc")
 
-    with open(f"{new}.enc", "wb") as f:
+    os.remove(note_path(old))
+
+    with open(note_path(new), "wb") as f:
         f.write(encrypt_note(new, content, password))
 
     del index[old]
-    index[new] = stream_sha256(f"{new}.enc")
+    index[new] = stream_sha256(note_path(new))
+
     save_index(index, password, salt, iters)
     print("Renamed.")
 
 
 def list_notes(password):
     index, _, _ = load_index(password)
+
     if not index:
         print("Empty vault.")
     else:
