@@ -1,15 +1,6 @@
 """
 secure_notes.py
 
-Fixes over original:
-  1. AES-256-GCM (via AESGCM) replaces Fernet (was AES-128-CBC)
-  2. Note names encrypted inside vault index — no plaintext metadata on disk
-  3. Integrity authenticated via GCM tag, not unauthenticated SHA256
-  4. Atomic writes (write-to-temp + os.replace) on every file operation
-  5. Argon2id replaces PBKDF2 for memory-hard key derivation
-  6. Password held in bytearray and zeroed after use (best-effort under Python)
-"""
-
 import json
 import re
 import os
