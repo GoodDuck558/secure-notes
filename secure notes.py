@@ -1,5 +1,3 @@
-"""
-secure_notes.py
 
 import json
 import re
